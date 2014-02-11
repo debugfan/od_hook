@@ -3,13 +3,22 @@
 
 #include <windows.h>
 #include <detours.h>
-#include <stdarg.h>
-#include <stdio.h>
+#include "read_config.h"
+#include "debug_log.h"
 #include <map>
 using namespace std;
 
+#include <detours.h>
 #pragma comment(lib, "detours.lib")
+
+#ifdef USE_DETOURED_DLL
 #pragma comment(lib, "detoured.lib")
+#else
+HMODULE WINAPI Detoured()
+{
+    return NULL;
+}
+#endif
 
 #define EFLAGS_TRAP 0x00000100
 
@@ -85,30 +94,6 @@ static BOOL (WINAPI *Real_WriteProcessMemory) (
 
 static int ep_flag = 0;
 
-void _Output(LPCSTR formatstring, ...) 
-{
-    int nSize = 0;
-    char buff[1024];
-    memset(buff, 0, sizeof(buff));
-    va_list args;
-    va_start(args, formatstring);
-    nSize = _vsnprintf(buff, sizeof(buff) - 1, formatstring, args);
-    va_end(args);
-    if(nSize <= 0)
-    {
-        OutputDebugString("_vsnprintf failed");
-    }
-    else 
-    {
-        OutputDebugString(buff);
-    }
-}
-
-#define Log_info _Output
-#define Log_info2 _Output
-#define Log_error _Output
-#define Log_warn _Output
-
 BOOL GetThreadContextById(DWORD thread_id, LPCONTEXT lpContext)
 {
     BOOL ret;
@@ -162,8 +147,8 @@ BOOL update_context_by_hwbp(CONTEXT *ctx, int slot, void *address, int length, i
     ctx->Dr7 = ctx->Dr7  & (~(0x3 << ((slot * 4) + 18)));
     ctx->Dr7 = ctx->Dr7 | (length << ((slot * 4) + 18));
     
-    Log_info("[update_context_by_hwbp]Dr0: %x, Dr1: %x, Dr2: %x, Dr3: %x, Dr6: %x, Dr7: %x",
-        ctx->Dr0, ctx->Dr1, ctx->Dr2, ctx->Dr3, ctx->Dr6, ctx->Dr7);
+    log_info(("[update_context_by_hwbp]Dr0: %x, Dr1: %x, Dr2: %x, Dr3: %x, Dr6: %x, Dr7: %x",
+        ctx->Dr0, ctx->Dr1, ctx->Dr2, ctx->Dr3, ctx->Dr6, ctx->Dr7));
 
     return TRUE;
 }
@@ -182,7 +167,7 @@ BOOL set_hwbp(HANDLE thread_handle, DWORD thread_id, int available, void *addres
     {
         if(!GetThreadContextById(thread_id, &context))
         {
-            Log_error("[%s]GetThreadContextById failed", __FUNCTION__);
+            log_error(("[%s]GetThreadContextById failed", __FUNCTION__));
             return FALSE;
         }
     }
@@ -191,10 +176,10 @@ BOOL set_hwbp(HANDLE thread_handle, DWORD thread_id, int available, void *addres
         //context = self.get_thread_context(thread_id=thread_id)
         if(!GetThreadContext(thread_handle, &context))
         {
-            Log_error("[%s]GetThreadContext failed", __FUNCTION__);
+            log_error(("[%s]GetThreadContext failed", __FUNCTION__));
             if(!GetThreadContextById(thread_id, &context)) 
             {
-                Log_error("[%s]GetThreadContextById failed", __FUNCTION__);
+                log_error(("[%s]GetThreadContextById failed", __FUNCTION__));
                 return FALSE;
             }
         }
@@ -209,7 +194,7 @@ BOOL set_hwbp(HANDLE thread_handle, DWORD thread_id, int available, void *addres
     //if(!SetThreadContext(hThread, &context))
     if(!SetThreadContextById(thread_id, &context))
     {
-        Log_error("[%s]SetThreadContext failed", __FUNCTION__);
+        log_error(("[%s]SetThreadContext failed", __FUNCTION__));
         return FALSE;
     }
     return TRUE;
@@ -228,11 +213,11 @@ BOOL set_single_step(HANDLE thread_handle, BOOL enable)
     //context = self.get_thread_context(thread_id=thread_id)
     if(!GetThreadContext(thread_handle, &context))
     {
-        Log_error("[%s]GetThreadContext failed", __FUNCTION__);
+        log_error(("[%s]GetThreadContext failed", __FUNCTION__));
         return FALSE;
     }
 
-    Log_info("[%s]context.EFlags: %x", __FUNCTION__, context.EFlags);
+    log_info(("[%s]context.EFlags: %x", __FUNCTION__, context.EFlags));
 
     if(enable) 
     {
@@ -254,7 +239,7 @@ BOOL set_single_step(HANDLE thread_handle, BOOL enable)
 
     if(!SetThreadContext(thread_handle, &context))
     {
-        Log_error("[%s]SetThreadContext failed", __FUNCTION__);
+        log_error(("[%s]SetThreadContext failed", __FUNCTION__));
         return FALSE;
     }
 
@@ -273,7 +258,7 @@ BOOL is_single_step(DWORD thread_id)
 
     if(!GetThreadContextById(thread_id, &context))
     {
-        Log_error("[%s]GetThreadContextById failed", __FUNCTION__);
+        log_error(("[%s]GetThreadContextById failed", __FUNCTION__));
         return FALSE;
     }
 
@@ -326,24 +311,24 @@ VOID DumpHardwareBreakpoint(DWORD tid)
 
     if(FALSE == GetThreadContextById(tid, &ctx))
     {
-        Log_error("[%s]GetThreadContextById failed", __FUNCTION__);
+        log_error(("[%s]GetThreadContextById failed", __FUNCTION__));
         return;
     }
 
-    Log_info("[%s]Dump hardware breakpoint, thread id 0x%x", 
+    log_info(("[%s]Dump hardware breakpoint, thread id 0x%x", 
         __FUNCTION__, 
-        tid);
+        tid));
 
     for(int slot = 0; slot < 4; slot++)
     {
         if(GetHardwareBreakpointInfo(&hwbp, slot, &ctx))
         {
-            Log_info("[%s]slot: %d, address: 0x%x, length: %d, condition: 0x%x",
+            log_info(("[%s]slot: %d, address: 0x%x, length: %d, condition: 0x%x",
                 __FUNCTION__,
                 slot,
                 hwbp.address,
                 hwbp.length,
-                hwbp.condition);
+                hwbp.condition));
         }
     }
 }
@@ -360,16 +345,16 @@ BOOL CopyHardwareBreakpoint(DWORD src_tid, DWORD dest_tid)
     src_ctx.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
     if(FALSE == GetThreadContextById(src_tid, &src_ctx))
     {
-        Log_error("[%s]GetThreadContextById failed", __FUNCTION__);
+        log_error(("[%s]GetThreadContextById failed", __FUNCTION__));
         return FALSE;
     }
     for(int slot = 0; slot < 4; slot++)
     {
         if(GetHardwareBreakpointInfo(&hwbp, slot, &src_ctx))
         {
-            Log_info("[%s]set hardware breakpoint, address: 0x%x", 
+            log_info(("[%s]set hardware breakpoint, address: 0x%x", 
                 __FUNCTION__,
-                hwbp.address);
+                hwbp.address));
             set_hwbp(NULL, dest_tid, hwbp.slot, hwbp.address, hwbp.length, hwbp.condition);
         }
     }
@@ -389,7 +374,7 @@ BOOL WINAPI My_CreateProcessA(
                           LPPROCESS_INFORMATION lpProcessInformation
                           )
 {
-    Log_info("[%s]lpApplicationName: %s, "
+    log_info(("[%s]lpApplicationName: %s, "
         "lpCommandLine: %s, "
         "lpProcessAttributes: %x, "
         "lpThreadAttributes: %x, "
@@ -409,7 +394,7 @@ BOOL WINAPI My_CreateProcessA(
         lpEnvironment,
         IsNullString(lpCurrentDirectory),
         lpStartupInfo,
-        lpProcessInformation);
+        lpProcessInformation));
     return Real_CreateProcessA(lpApplicationName,
         lpCommandLine,
         lpProcessAttributes,
@@ -428,15 +413,15 @@ BOOL WINAPI My_GetThreadContext(
                        )
 {
     BOOL ret = Real_GetThreadContext(hThread, lpContext);
-    Log_info("My_SetThreadContext Entry");
+    log_info(("My_SetThreadContext Entry"));
     if(ret)
     {
-        Log_info("[My_GetThreadContext]Dr0: %x, Dr1: %x, Dr2: %x, Dr3: %x, Dr6: %x, Dr7: %x",
-            lpContext->Dr0, lpContext->Dr1, lpContext->Dr2, lpContext->Dr3, lpContext->Dr6, lpContext->Dr7);
+        log_info(("[My_GetThreadContext]Dr0: %x, Dr1: %x, Dr2: %x, Dr3: %x, Dr6: %x, Dr7: %x",
+            lpContext->Dr0, lpContext->Dr1, lpContext->Dr2, lpContext->Dr3, lpContext->Dr6, lpContext->Dr7));
     }
     else 
     {
-        Log_error("[My_GetThreadContext]failed");
+        log_error(("[My_GetThreadContext]failed"));
     }
 
     return ret;
@@ -477,9 +462,9 @@ BOOL WINAPI My_SetThreadContext(
                                 const CONTEXT* lpContext
                                 )
 {
-    Log_info("My_SetThreadContext Entry");
-    Log_info("[My_SetThreadContext]Dr0: %x, Dr1: %x, Dr2: %x, Dr3: %x, Dr6: %x, Dr7: %x",
-        lpContext->Dr0, lpContext->Dr1, lpContext->Dr2, lpContext->Dr3, lpContext->Dr6, lpContext->Dr7);
+    log_info(("My_SetThreadContext Entry"));
+    log_info(("[My_SetThreadContext]Dr0: %x, Dr1: %x, Dr2: %x, Dr3: %x, Dr6: %x, Dr7: %x",
+        lpContext->Dr0, lpContext->Dr1, lpContext->Dr2, lpContext->Dr3, lpContext->Dr6, lpContext->Dr7));
     return Real_SetThreadContext(hThread, lpContext);
 }
 
@@ -512,17 +497,17 @@ BOOL WINAPI My_WaitForDebugEvent(
         return ret;
     }
 
-    Log_info2("[%s]dwThreadId: 0x%x, dwDebugEventCode: 0x%x",
+    log_info2(("[%s]dwThreadId: 0x%x, dwDebugEventCode: 0x%x",
         __FUNCTION__, 
         lpDebugEvent->dwThreadId,
-        lpDebugEvent->dwDebugEventCode);
+        lpDebugEvent->dwDebugEventCode));
 
     if(lpDebugEvent->dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT) 
     {
         thread_id = lpDebugEvent->dwThreadId;
-        Log_info("[%s]CREATE_PROCESS_DEBUG_EVENT, thread_id: 0x%x",
+        log_info(("[%s]CREATE_PROCESS_DEBUG_EVENT, thread_id: 0x%x",
             __FUNCTION__,
-            thread_id);
+            thread_id));
         main_thread_id = thread_id;
         DumpHardwareBreakpoint(thread_id);
         thread_states[thread_id] = HARDWARE_BREAKPOINT_NONE;
@@ -534,10 +519,10 @@ BOOL WINAPI My_WaitForDebugEvent(
         HANDLE thread_handle;
         thread_handle = lpDebugEvent->u.CreateThread.hThread;
         thread_id = lpDebugEvent->dwThreadId;
-        Log_info("[%s]CREATE_THREAD_DEBUG_EVENT, thread_handle: 0x%x, thread_id: 0x%x",
+        log_info(("[%s]CREATE_THREAD_DEBUG_EVENT, thread_handle: 0x%x, thread_id: 0x%x",
              __FUNCTION__,
              thread_handle,
-             thread_id);
+             thread_id));
         CopyHardwareBreakpoint(main_thread_id, thread_id);
         DumpHardwareBreakpoint(thread_id);
         thread_states[thread_id] = HARDWARE_BREAKPOINT_NONE;
@@ -552,10 +537,10 @@ BOOL WINAPI My_WaitForDebugEvent(
         exception_code = lpDebugEvent->u.Exception.ExceptionRecord.ExceptionCode;
         exception_address = lpDebugEvent->u.Exception.ExceptionRecord.ExceptionAddress;
 
-        Log_info2("[%s]EXCEPTION_DEBUG_EVENT, exception_code: 0x%x, exception_address: 0x%x",
+        log_info2(("[%s]EXCEPTION_DEBUG_EVENT, exception_code: 0x%x, exception_address: 0x%x",
             __FUNCTION__,
             exception_code,
-            exception_address);
+            exception_address));
 
         if(exception_code == EXCEPTION_SINGLE_STEP)
         {
@@ -583,19 +568,22 @@ BOOL WINAPI My_WaitForDebugEvent(
             return ret;
         }
 
-        // skip some exceptions
-        if(exception_code == EXCEPTION_INT_OVERFLOW
-            || exception_code == EXCEPTION_ILLEGAL_INSTRUCTION)
+        if(g_skip_some_exceptions)
         {
-            Log_warn("[%s]Skip an exception. dwThreadId: 0x%x, dwDebugEventCode: 0x%x",
-                __FUNCTION__, 
-                lpDebugEvent->dwThreadId,
-                lpDebugEvent->dwDebugEventCode);
-
-            ContinueDebugEvent(lpDebugEvent->dwProcessId,
-                lpDebugEvent->dwThreadId,
-                DBG_EXCEPTION_NOT_HANDLED);
-            return WaitForDebugEvent(lpDebugEvent, dwMilliseconds);
+            // skip some exceptions
+            if(exception_code == EXCEPTION_INT_OVERFLOW
+                || exception_code == EXCEPTION_ILLEGAL_INSTRUCTION)
+            {
+                log_warn(("[%s]Skip an exception. dwThreadId: 0x%x, dwDebugEventCode: 0x%x",
+                    __FUNCTION__, 
+                    lpDebugEvent->dwThreadId,
+                    lpDebugEvent->dwDebugEventCode));
+                
+                ContinueDebugEvent(lpDebugEvent->dwProcessId,
+                    lpDebugEvent->dwThreadId,
+                    DBG_EXCEPTION_NOT_HANDLED);
+                return WaitForDebugEvent(lpDebugEvent, dwMilliseconds);
+            }
         }
 
         return ret;
@@ -620,11 +608,11 @@ BOOL WINAPI My_ContinueDebugEvent (
 #define __FUNCTION__ "My_ContinueDebugEvent"
 #endif
 
-    Log_info2("[%s]dwProcessId: 0x%x, dwThreadId: 0x%x, dwContinueStatus: 0x%x", 
+    log_info2(("[%s]dwProcessId: 0x%x, dwThreadId: 0x%x, dwContinueStatus: 0x%x", 
         __FUNCTION__,
         dwProcessId,
         dwThreadId,
-        dwContinueStatus);
+        dwContinueStatus));
 
     if(thread_states[dwThreadId] == HARDWARE_BREAKPOINT_FOUND)
     {
@@ -643,15 +631,15 @@ BOOL WINAPI My_ContinueDebugEvent (
         {
             if(dwThreadId != main_thread_id)
             {
-                Log_info("[%s]Restore hardware breakpoints", __FUNCTION__);
+                log_info(("[%s]Restore hardware breakpoints", __FUNCTION__));
                 CopyHardwareBreakpoint(main_thread_id, dwThreadId);
             }
             else
             {
-                Log_info("[%s]Don't know how to restore hardware breakpoints", __FUNCTION__);
+                log_info(("[%s]Don't know how to restore hardware breakpoints", __FUNCTION__));
             }
             
-            Log_info("[%s]Correct debug continue status", __FUNCTION__);
+            log_info(("[%s]Correct debug continue status", __FUNCTION__));
             dwContinueStatus = DBG_CONTINUE;
         }
         
@@ -680,12 +668,12 @@ BOOL WINAPI My_ReadProcessMemory(
         lpBuffer,
         nSize,
         lpNumberOfBytesRead);
-    Log_info("[My_ReadProcessMemory]lpBaseAddress: %x, lpBuffer: %x, nSize: %x, lpNumberOfBytesRead: %x", 
+    log_info(("[My_ReadProcessMemory]lpBaseAddress: %x, lpBuffer: %x, nSize: %x, lpNumberOfBytesRead: %x", 
         lpBaseAddress,
         lpBuffer,
         nSize,
         lpNumberOfBytesRead
-        );
+        ));
     return ret;
 }
 
@@ -697,13 +685,29 @@ BOOL WINAPI My_WriteProcessMemory(
                                SIZE_T* lpNumberOfBytesWritten
                                )
 {
-    Log_info("[WriteProcessMemory]lpBaseAddress: %x, lpBuffer: %x, nSize: %x, lpNumberOfBytesWritten: %x", 
+    log_info(("[WriteProcessMemory]lpBaseAddress: %x, lpBuffer: %x, nSize: %x, lpNumberOfBytesWritten: %x", 
         lpBaseAddress,
         lpBuffer,
         nSize,
         lpNumberOfBytesWritten
-        );
+        ));
     return Real_WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten);
+}
+
+BOOL (WINAPI *Real_SetForegroundWindow) (
+                                HWND hWnd
+                                ) = SetForegroundWindow;
+
+BOOL WINAPI My_SetForegroundWindow(HWND hWnd)
+{
+    if(g_disable_set_fore_ground_window)
+    {
+        return TRUE;
+    }
+    else
+    {
+        return Real_SetForegroundWindow(hWnd);
+    }
 }
 
 extern "C" __declspec(dllexport) int donothing(int x) 
@@ -714,34 +718,53 @@ extern "C" __declspec(dllexport) int donothing(int x)
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved)
 {
     LONG result = NO_ERROR;
-    if (dwReason == DLL_PROCESS_ATTACH) {
+    if (dwReason == DLL_PROCESS_ATTACH)
+    {
         Sleep(100);
+        init_and_read_config(hinst);
         DetourRestoreAfterWith();
         DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread()); 
-        //result |= DetourAttach(&(PVOID&)Real_CreateProcessA, My_CreateProcessA);
-        //result |= DetourAttach(&(PVOID&)Real_GetThreadContext, My_GetThreadContext);
-        //result |= DetourAttach(&(PVOID&)Real_SetThreadContext, My_SetThreadContext);
-        result |= DetourAttach(&(PVOID&)Real_WaitForDebugEvent, My_WaitForDebugEvent);
-        result |= DetourAttach(&(PVOID&)Real_ContinueDebugEvent, My_ContinueDebugEvent);
-        //result |= DetourAttach(&(PVOID&)Real_ReadProcessMemory, My_ReadProcessMemory);
-        //result |= DetourAttach(&(PVOID&)Real_WriteProcessMemory, My_WriteProcessMemory);
+        DetourUpdateThread(GetCurrentThread());
+#ifdef _DEBUG
+        result |= DetourAttach(&(PVOID&)Real_CreateProcessA, My_CreateProcessA);
+        result |= DetourAttach(&(PVOID&)Real_GetThreadContext, My_GetThreadContext);
+        result |= DetourAttach(&(PVOID&)Real_SetThreadContext, My_SetThreadContext);
+#endif
+        if(g_fix_hardware_breakpoints_bugs)
+        {
+            result |= DetourAttach(&(PVOID&)Real_WaitForDebugEvent, My_WaitForDebugEvent);
+            result |= DetourAttach(&(PVOID&)Real_ContinueDebugEvent, My_ContinueDebugEvent);
+        }
+#ifdef _DEBUG
+        result |= DetourAttach(&(PVOID&)Real_ReadProcessMemory, My_ReadProcessMemory);
+        result |= DetourAttach(&(PVOID&)Real_WriteProcessMemory, My_WriteProcessMemory);
+#endif
+        result |= DetourAttach(&(PVOID&)Real_SetForegroundWindow, My_SetForegroundWindow);
         DetourTransactionCommit();
         if(result != NO_ERROR)
         {
-            Log_error("Detour failed, error code: %x", result);
+            log_error(("Detour failed, error code: %x", result));
         }
     }
-    else if (dwReason == DLL_PROCESS_DETACH) {
+    else if (dwReason == DLL_PROCESS_DETACH) 
+    {
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
-        //DetourDetach(&(PVOID&)Real_CreateProcessA, My_CreateProcessA);
-        //DetourDetach(&(PVOID&)Real_GetThreadContext, My_GetThreadContext);
-        //DetourDetach(&(PVOID&)Real_SetThreadContext, My_SetThreadContext);
-        DetourDetach(&(PVOID&)Real_WaitForDebugEvent, My_WaitForDebugEvent);
-        DetourDetach(&(PVOID&)Real_ContinueDebugEvent, My_ContinueDebugEvent);
-        //DetourDetach(&(PVOID&)Real_ReadProcessMemory, My_ReadProcessMemory);
-        //DetourDetach(&(PVOID&)Real_WriteProcessMemory, My_WriteProcessMemory);
+#ifdef _DEBUG
+        DetourDetach(&(PVOID&)Real_CreateProcessA, My_CreateProcessA);
+        DetourDetach(&(PVOID&)Real_GetThreadContext, My_GetThreadContext);
+        DetourDetach(&(PVOID&)Real_SetThreadContext, My_SetThreadContext);
+#endif
+        if(g_fix_hardware_breakpoints_bugs)
+        {
+            DetourDetach(&(PVOID&)Real_WaitForDebugEvent, My_WaitForDebugEvent);
+            DetourDetach(&(PVOID&)Real_ContinueDebugEvent, My_ContinueDebugEvent);
+        }
+#ifdef _DEBUG
+        DetourDetach(&(PVOID&)Real_ReadProcessMemory, My_ReadProcessMemory);
+        DetourDetach(&(PVOID&)Real_WriteProcessMemory, My_WriteProcessMemory);
+#endif
+        DetourDetach(&(PVOID&)Real_SetForegroundWindow, My_SetForegroundWindow);
         DetourTransactionCommit();
     }
     return TRUE;
