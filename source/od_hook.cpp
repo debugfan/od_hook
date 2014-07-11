@@ -572,10 +572,11 @@ BOOL WINAPI My_WaitForDebugEvent(
         {
             // skip some exceptions
             if(exception_code == EXCEPTION_INT_OVERFLOW
-                || exception_code == EXCEPTION_ILLEGAL_INSTRUCTION)
+                || exception_code == EXCEPTION_ILLEGAL_INSTRUCTION
+                || exception_code == EXCEPTION_ACCESS_VIOLATION)
             {
                 log_warn(("[%s]Skip an exception. dwThreadId: 0x%x, dwDebugEventCode: 0x%x",
-                    __FUNCTION__, 
+                    __FUNCTION__,
                     lpDebugEvent->dwThreadId,
                     lpDebugEvent->dwDebugEventCode));
                 
